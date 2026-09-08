@@ -24,21 +24,16 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import re
 from collections import Counter
 from typing import Protocol
 
-DEFAULT_DIM = int(os.environ.get("EMBED_DIM", "512"))
+from .tokenize_utils import tokenize
 
-_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+DEFAULT_DIM = int(os.environ.get("EMBED_DIM", "512"))
 
 
 class Embedder(Protocol):
     def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
-
-
-def _tokenize(text: str) -> list[str]:
-    return [t.lower() for t in _TOKEN_RE.findall(text)]
 
 
 def _hash_token(token: str, dim: int) -> tuple[int, float]:
@@ -59,7 +54,7 @@ class HashingEmbedder:
 
     def _embed_one(self, text: str) -> list[float]:
         vec = [0.0] * self.dim
-        for token, count in Counter(_tokenize(text)).items():
+        for token, count in Counter(tokenize(text)).items():
             idx, sign = _hash_token(token, self.dim)
             vec[idx] += sign * count
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0

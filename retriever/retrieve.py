@@ -15,29 +15,22 @@ Qdrant-filtered by language/is_page before the boost is applied.
 """
 from __future__ import annotations
 
-import re
-
 from qdrant_client.http import models as qm
 
 from indexer.config import QDRANT_URL  # noqa: F401  (import triggers load_dotenv via config)
 from indexer.embedder import get_embedder
 from indexer.setup_collection import COLLECTION_NAME, get_client
-
-_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+from indexer.tokenize_utils import tokenize
 
 # candidate pool fetched from Qdrant before the keyword re-rank narrows it to top_k
 _CANDIDATE_MULTIPLIER = 4
 KEYWORD_BOOST_PER_HIT = 0.15
 
 
-def _tokenize(text: str) -> set[str]:
-    return {t.lower() for t in _TOKEN_RE.findall(text)}
-
-
 def _keyword_boost(query_tokens: set[str], payload: dict) -> float:
     if not query_tokens:
         return 0.0
-    haystack = _tokenize(payload.get("file_path", "")) | _tokenize(payload.get("symbol_name", ""))
+    haystack = set(tokenize(payload.get("file_path", ""))) | set(tokenize(payload.get("symbol_name", "")))
     hits = len(query_tokens & haystack)
     return hits * KEYWORD_BOOST_PER_HIT
 
@@ -59,15 +52,15 @@ def retrieve(
         must.append(qm.FieldCondition(key="is_page", match=qm.MatchValue(value=True)))
     query_filter = qm.Filter(must=must) if must else None
 
-    hits = client.search(
+    hits = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=vector,
+        query=vector,
         query_filter=query_filter,
         limit=top_k * _CANDIDATE_MULTIPLIER,
         with_payload=True,
-    )
+    ).points
 
-    query_tokens = _tokenize(query)
+    query_tokens = set(tokenize(query))
     scored = [
         {
             "file_path": hit.payload["file_path"],
