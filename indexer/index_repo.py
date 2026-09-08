@@ -9,7 +9,12 @@ so re-running the indexer updates existing points instead of duplicating
 them.
 
 CLI:
+    # index a repo you already have checked out locally
     python -m indexer.index_repo --root <path> [--recreate]
+
+    # or sync a local mirror from GitHub first, then index that
+    python -m indexer.index_repo --repo-url https://github.com/<owner>/<repo> \\
+        [--branch main] [--clone-dir <path>] [--recreate]
 """
 from __future__ import annotations
 
@@ -23,7 +28,10 @@ from qdrant_client.http import models as qm
 
 from .chunker import Chunk, SUPPORTED_EXTENSIONS, chunk_file
 from .embedder import get_embedder
+from .github_source import repo_name_from_url, sync_from_github
 from .setup_collection import COLLECTION_NAME, setup_collection
+
+DEFAULT_CLONE_ROOT = Path(__file__).resolve().parent.parent / "repos"
 
 ALWAYS_EXCLUDED_DIRS = {"node_modules", "dist", "build", "__pycache__", "venv", ".venv", ".git"}
 BATCH_SIZE = 64
@@ -97,10 +105,24 @@ def index_repo(root: str | Path, recreate: bool = False) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", required=True, help="Path to the repo to index")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--root", help="Path to a repo you already have checked out locally")
+    source.add_argument("--repo-url", help="GitHub URL to sync a local mirror from before indexing")
+    parser.add_argument(
+        "--clone-dir",
+        help="Where to sync --repo-url into (default: ./repos/<repo-name> under code_agent)",
+    )
+    parser.add_argument("--branch", help="Branch to check out when using --repo-url (default: repo's default branch)")
     parser.add_argument("--recreate", action="store_true", help="Drop and recreate the collection first")
     args = parser.parse_args()
-    n = index_repo(args.root, recreate=args.recreate)
+
+    if args.repo_url:
+        clone_dir = args.clone_dir or (DEFAULT_CLONE_ROOT / repo_name_from_url(args.repo_url))
+        root = sync_from_github(args.repo_url, clone_dir, branch=args.branch)
+    else:
+        root = args.root
+
+    n = index_repo(root, recreate=args.recreate)
     print(f"Done. Indexed {n} chunk(s).")
 
 

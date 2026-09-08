@@ -34,8 +34,13 @@ parsing, patch generation, PR creation) — not used yet.
 # one-time: create the Qdrant collection + payload indexes
 python -m indexer.setup_collection
 
-# index a repo (chunk + embed + upsert)
+# index a repo you already have checked out locally
 python -m indexer.index_repo --root /path/to/some/repo
+
+# or index straight from GitHub — clones/pulls into ./repos/<name> first,
+# then indexes that local mirror (the indexer always needs a real
+# filesystem tree; see indexer/github_source.py)
+python -m indexer.index_repo --repo-url https://github.com/<owner>/<repo> --branch main
 
 # re-index from scratch
 python -m indexer.index_repo --root /path/to/some/repo --recreate
