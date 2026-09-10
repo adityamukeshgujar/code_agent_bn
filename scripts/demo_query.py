@@ -19,7 +19,7 @@ def main() -> None:
         print('Usage: python scripts/demo_query.py "<query>"')
         raise SystemExit(1)
     query = " ".join(sys.argv[1:])
-    results = retrieve(query, top_k=5)
+    results = retrieve(query, top_k=10)
     if not results:
         print("No results. Did you run `python -m indexer.index_repo --root <path>` first?")
         return
