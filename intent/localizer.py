@@ -12,11 +12,24 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tree_sitter_language_pack import get_parser
+
+from indexer.chunker import EXT_TO_LANGUAGE
 from indexer.tokenize_utils import tokenize
 from retriever.retrieve import retrieve
 
 # Directories never worth scanning for style definitions / other usages.
 _EXCLUDED_DIR_PARTS = {"node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".git"}
+
+# JSX tag names worth treating as an element-matching candidate. Deliberately
+# excludes structural wrappers like div/section — those would "contain" a
+# match's tokens just by having the real target nested somewhere inside
+# them, and being much bigger, would otherwise tie-break incorrectly.
+_JSX_CANDIDATE_TAGS = {
+    "button", "input", "textarea", "select", "option", "a", "label",
+    "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+}
+_JSX_ELEMENT_NODE_TYPES = {"jsx_element", "jsx_self_closing_element"}
 
 # Stylesheet filenames that are global/app-wide by convention, as opposed to
 # a component-scoped stylesheet (e.g. `Button.css` next to `Button.jsx`).
@@ -174,6 +187,65 @@ def resolve_css_module(repo_root: Path, owning_file_text: str, owning_file: str,
     return style_file, False, None, []
 
 
+def _jsx_tag_name(node) -> str | None:
+    opening = node if node.type == "jsx_self_closing_element" else next(
+        (c for c in node.children if c.type == "jsx_opening_element"), None
+    )
+    if opening is None:
+        return None
+    name_node = next((c for c in opening.children if c.type in ("identifier", "member_expression")), None)
+    return name_node.text.decode("utf-8", errors="replace") if name_node is not None else None
+
+
+def find_best_matching_element(
+    source: str, language: str, element_tokens: set[str]
+) -> tuple[int, int] | None:
+    """Tree-sitter-based alternative to find_best_matching_line: scores whole
+    JSX elements (button/input/span/etc. — see _JSX_CANDIDATE_TAGS) by
+    token overlap across their FULL span, however many lines it takes —
+    not just whatever happens to share a line with a literal '<'.
+
+    This exists because real-world JSX is routinely formatted with the
+    opening tag on its own line and attributes/text children several lines
+    below it (Prettier-style), so a line-by-line scorer never even sees the
+    tokens that would identify the right element — the '<button' line
+    alone might have zero overlapping tokens while the real match ("submit",
+    a className, the button's text) is 5+ lines later. Scoring the parsed
+    element's full text sidesteps that regardless of formatting.
+
+    Returns (start_line, end_line), both 1-indexed inclusive, of the
+    best-scoring candidate — ties broken toward the smaller/more specific
+    element, so a big wrapper that merely *contains* the real target
+    doesn't win just by aggregating more text. None if `language` isn't
+    JSX-capable, parsing fails, or nothing overlaps at all.
+    """
+    if language not in ("javascript", "typescript", "tsx"):
+        return None
+    parser = get_parser(language)
+    tree = parser.parse(source.encode("utf-8"))
+
+    best_key: tuple[int, int] | None = None  # (score, -span_size); bigger is better
+    best_span: tuple[int, int] | None = None
+
+    def visit(node) -> None:
+        nonlocal best_key, best_span
+        if node.type in _JSX_ELEMENT_NODE_TYPES:
+            tag = _jsx_tag_name(node)
+            if tag and tag.lower() in _JSX_CANDIDATE_TAGS:
+                text = node.text.decode("utf-8", errors="replace")
+                score = len(element_tokens & set(tokenize(text)))
+                if score > 0:
+                    key = (score, -(node.end_byte - node.start_byte))
+                    if best_key is None or key > best_key:
+                        best_key = key
+                        best_span = (node.start_point[0] + 1, node.end_point[0] + 1)
+        for child in node.children:
+            visit(child)
+
+    visit(tree.root_node)
+    return best_span
+
+
 def find_best_matching_line(
     lines: list[str], element_tokens: set[str], search_ranges: list[tuple[int, int]]
 ) -> int | None:
@@ -240,26 +312,38 @@ def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResul
 
     element_tokens = set(tokenize(intent.element)) if intent.element else set()
     start, end = top["lines"]
-    match_idx = find_best_matching_line(lines, element_tokens, [(start, end), (1, len(lines))])
+    language = EXT_TO_LANGUAGE.get(Path(top_file).suffix.lower())
 
-    if match_idx is None:
-        snippet = "\n".join(lines[start - 1 : end])
-        return LocalizationResult(
-            ok=True,
-            file_path=top_file,
-            start_line=start,
-            end_line=end,
-            element_snippet=snippet,
-            styling_mechanism="unknown",
-            candidates=ranked,
-            ambiguous_files=ambiguous_files,
-            note="Could not pinpoint the exact element line within the matched component — returning the whole component instead.",
-            summary=f"{top['symbol_name']} in `{top_file}`, lines {start}-{end} — exact element line not pinpointed.",
-        )
+    # Prefer the tree-sitter element matcher — it scores a JSX element's
+    # FULL span regardless of how many lines its attributes/text spread
+    # across, unlike line-by-line scoring (see find_best_matching_element's
+    # docstring for why that distinction is not cosmetic). Only falls back
+    # to the line-based scorer for non-JSX languages or if nothing scored.
+    element_span = find_best_matching_element(full_text, language, element_tokens) if language else None
 
-    window_lo, window_hi = max(0, match_idx - 2), min(len(lines), match_idx + 3)
-    snippet = "\n".join(lines[window_lo:window_hi])
-    line_no = match_idx + 1
+    if element_span is not None:
+        elem_start, elem_end = element_span
+        snippet = "\n".join(lines[elem_start - 1 : elem_end])
+        line_no, end_line_no = elem_start, elem_end
+    else:
+        match_idx = find_best_matching_line(lines, element_tokens, [(start, end), (1, len(lines))])
+        if match_idx is None:
+            snippet = "\n".join(lines[start - 1 : end])
+            return LocalizationResult(
+                ok=True,
+                file_path=top_file,
+                start_line=start,
+                end_line=end,
+                element_snippet=snippet,
+                styling_mechanism="unknown",
+                candidates=ranked,
+                ambiguous_files=ambiguous_files,
+                note="Could not pinpoint the exact element line within the matched component — returning the whole component instead.",
+                summary=f"{top['symbol_name']} in `{top_file}`, lines {start}-{end} — exact element line not pinpointed.",
+            )
+        window_lo, window_hi = max(0, match_idx - 2), min(len(lines), match_idx + 3)
+        snippet = "\n".join(lines[window_lo:window_hi])
+        line_no = end_line_no = match_idx + 1
 
     mechanism, style_ref = classify_styling(snippet)
 
@@ -279,8 +363,9 @@ def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResul
         "unknown": "an unrecognized styling mechanism",
     }[mechanism]
 
+    line_range = f"line {line_no}" if line_no == end_line_no else f"lines {line_no}-{end_line_no}"
     summary = (
-        f"{mechanism_label} (`{style_ref}`) on the matched element in `{top_file}`, line {line_no}"
+        f"{mechanism_label} (`{style_ref}`) on the matched element in `{top_file}`, {line_range}"
         + (f" — defined in `{style_file}`" if style_file else "")
         + (" — SHARED/global style, other elements may be affected" if is_shared else " — page-local")
         + "."
@@ -290,7 +375,7 @@ def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResul
         ok=True,
         file_path=top_file,
         start_line=line_no,
-        end_line=line_no,
+        end_line=end_line_no,
         element_snippet=snippet,
         styling_mechanism=mechanism,
         style_ref=style_ref,
