@@ -12,6 +12,7 @@ See [CLAUDE.md](CLAUDE.md) for the full spec. This is the phased build of it.
 | 4 | Patch application & validation | Done — `patcher.py` (css_class/css_module/inline_style/tailwind_class) + `validator.py`. |
 | 5 | Git integration | Done — `git_ops.py`. Live push/PR not yet run end-to-end (dry-run/local-apply verified only). |
 | 6 | Orchestration entrypoint | Done — `agent/run.py`, with dry-run/`--apply`/`--push-pr`/`--allow-shared` safety gates. |
+| — | Skills library (identify-only) | Done — `skills/` — see "Skills" below. A curated alternative to Phase 2/3's free-text retrieval+localization for a fixed set of known UI change types; outputs only what needs to change, never patches. |
 
 ## Setup
 
@@ -60,6 +61,9 @@ python -m agent.run --request "Change the color of the submit button in Assessme
 # --push-pr additionally branches/commits/pushes/opens a GitHub PR (implies --apply)
 # --allow-shared is required if the target style is flagged as shared/global
 python -m agent.run --request "..." --root /path/to/some/repo --apply --push-pr --allow-shared
+
+# skills pipeline — identify only, never writes/patches/touches git
+python -m skills.run --request "Change the submit button color to green" --root /path/to/some/repo
 ```
 
 ## Chunker design notes
@@ -142,3 +146,42 @@ Three independent, opt-in safety gates, each stricter than the last:
 implies `--apply`; `--allow-shared` is required to proceed past a
 localization flagged `is_shared`. Every stage's output is printed as it
 happens and also collected into a `RunLog` for programmatic/audit use.
+
+## Skills
+
+`skills/` is a curated, hand-authored alternative to the free-text
+retrieval + heuristic localization in Phases 2-3, for a fixed set of known
+UI change types on a fixed set of files. Where `agent/run.py` searches the
+whole indexed repo and infers the styling mechanism from whatever it finds,
+`skills/run.py` matches the request to one of a small number of
+pre-written skill files and follows that skill's own notes about exactly
+where to look and what's already there — more reliable for a change type
+that's been seen before, at the cost of only covering what's been
+authored.
+
+- `skills/*.md` — one skill per (file, change-type) pair: YAML frontmatter
+  (`name`, `description` used for matching, `file`, `change_type`:
+  `change_color`/`change_text`/`enable_disable`, `elements`: known
+  anchors with approximate line numbers) + a human-readable "Steps"
+  section.
+- `skills/loader.py` — parses the frontmatter + body.
+- `skills/matcher.py` — Groq call that picks the single best-fitting
+  skill for a request (or none, rather than forcing a bad match).
+- `skills/executor.py` — reads the matched skill's target file and
+  pinpoints the exact line via the same max-token-overlap scoring as
+  `intent/localizer.py` (`find_best_matching_line`, `classify_styling`,
+  `resolve_css_class`/`resolve_css_module` are shared between the two,
+  not duplicated). Unlike the localizer, it searches its one target file
+  in a single pass rather than per-element windows — an early bug here
+  showed why: trying each declared element's line window as a separate
+  fallback range stops at the first one with *any* overlap, so a weakly
+  related earlier element beat a strongly related later one purely by
+  list order.
+- `skills/run.py` — `python -m skills.run --request "..." --root <path>`.
+  **Reduced scope, intentionally**: identifies the code and describes the
+  needed change only. No patch, no write, no git — that comes later once
+  this identify-only step has been exercised against real requests.
+
+Currently covers 3 files × 3 change types — `AssessmentPage.jsx`,
+`LoginPage.jsx`, `PdfHighlightViewer.jsx` (`frontend/src/components/` in
+the target repo used to build these) — = 9 skills.

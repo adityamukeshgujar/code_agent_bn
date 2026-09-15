@@ -21,13 +21,15 @@ DEFAULT_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
 # Actions that inherently need a concrete new value to apply — a bare
 # "change the button's color" with no color given can't be patched.
-_ACTIONS_REQUIRING_VALUE = {"change_color", "change_text", "change_size"}
+_ACTIONS_REQUIRING_VALUE = {"change_color", "change_text", "change_size", "enable_disable"}
 
 _SYSTEM_PROMPT = """You turn a natural-language UI change request into a JSON object with exactly these keys:
   "page": the page/screen the user means (e.g. "Assessment"), or null if unclear
   "element": the UI element being changed (e.g. "submit button"), or null if unclear
-  "action": one of "change_color", "change_text", "change_size", "resize", "reorder", "other"
-  "value": the new value for the change (e.g. a color name/hex, new text, a size), or null if the user didn't give one
+  "action": one of "change_color", "change_text", "change_size", "enable_disable", "resize", "reorder", "other"
+  "value": the new value for the change, or null if the user didn't give one —
+    a color name/hex for change_color, the new label for change_text, a size for
+    change_size, or exactly "enable"/"disable" for enable_disable
 
 Return ONLY the JSON object. No prose, no markdown fences.
 """

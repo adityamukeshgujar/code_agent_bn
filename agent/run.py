@@ -31,7 +31,7 @@ from intent.intent_parser import parse_intent
 from intent.localizer import localize
 from patcher.patcher import apply_patch, generate_patch, revert_patch
 from patcher.validator import validate
-from vcs.git_ops import open_pr
+from vcs.git_ops import dirty_files, open_pr
 
 MAX_VALIDATION_RETRIES = 2
 
@@ -113,6 +113,17 @@ def run(
         log.log("stopped", reason=log.stop_reason)
         return log
     log.log("patch_generated", target_file=patch.target_file, description=patch.description, diff=patch.diff_text)
+
+    if push_pr:
+        # Fail fast on pre-existing unrelated local changes rather than only
+        # discovering it after writing + validating the patch — git_ops'
+        # own check at that point necessarily also sees our own intended
+        # write, so it can only guard the *other* files, not this one.
+        pre_existing = [f for f in dirty_files(root) if f != patch.target_file]
+        if pre_existing:
+            log.stop_reason = f"Working tree already has unrelated local changes, refusing to proceed to --push-pr: {pre_existing}"
+            log.log("stopped", reason=log.stop_reason)
+            return log
 
     if not apply:
         log.ok = True

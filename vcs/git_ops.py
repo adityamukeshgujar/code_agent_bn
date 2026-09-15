@@ -44,6 +44,21 @@ def working_tree_is_clean(repo_root: str) -> bool:
     return _run_git(["status", "--porcelain"], repo_root).strip() == ""
 
 
+def dirty_files(repo_root: str) -> list[str]:
+    out = _run_git(["status", "--porcelain"], repo_root)
+    return [line[3:].strip() for line in out.splitlines() if line.strip()]
+
+
+def working_tree_is_clean_except(repo_root: str, allowed: set[str]) -> bool:
+    """True if every locally-modified file is one we intentionally patched.
+    By the time open_pr() runs, the patch has already been written to disk
+    (apply -> validate happens before the git phase) — so the working tree
+    is *expected* to be dirty on exactly `patch.target_file`. This guards
+    against unrelated pre-existing local changes, not our own intended one.
+    """
+    return set(dirty_files(repo_root)) <= allowed
+
+
 def current_branch(repo_root: str) -> str:
     return _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root).strip()
 
@@ -108,10 +123,14 @@ def open_pr(
 ) -> PrResult:
     original_branch: str | None = None
     try:
-        if not working_tree_is_clean(repo_root):
+        if not working_tree_is_clean_except(repo_root, {patch.target_file}):
             return PrResult(
                 ok=False,
-                error="Working tree has uncommitted changes — refusing to touch branches. Commit or stash first.",
+                error=(
+                    f"Working tree has changes beyond the intended patch ({patch.target_file}) — "
+                    f"refusing to touch branches. Commit or stash unrelated changes first. "
+                    f"Dirty files: {dirty_files(repo_root)}"
+                ),
             )
 
         original_branch = current_branch(repo_root)

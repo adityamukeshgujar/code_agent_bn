@@ -62,7 +62,7 @@ def _page_match_score(hit: dict, page_tokens: set[str]) -> int:
     return len(page_tokens & haystack)
 
 
-def _classify_styling(snippet: str) -> tuple[str, str]:
+def classify_styling(snippet: str) -> tuple[str, str]:
     if _STYLE_PROP_RE.search(snippet):
         return "inline_style", "style={{...}}"
     m = _CLASSNAME_EXPR_RE.search(snippet)
@@ -90,7 +90,7 @@ def _iter_files(repo_root: Path, *suffixes: str):
             yield path
 
 
-def _resolve_css_class(repo_root: Path, owning_file: str, class_name: str):
+def resolve_css_class(repo_root: Path, owning_file: str, class_name: str):
     selector_re = re.compile(rf"\.{re.escape(class_name)}\b")
     style_file = None
     for css_path in _iter_files(repo_root, ".css", ".scss"):
@@ -135,7 +135,7 @@ def _resolve_css_class(repo_root: Path, owning_file: str, class_name: str):
     return style_file, is_shared, shared_note, other_usages
 
 
-def _resolve_css_module(repo_root: Path, owning_file_text: str, owning_file: str, expr: str):
+def resolve_css_module(repo_root: Path, owning_file_text: str, owning_file: str, expr: str):
     m = re.search(r"\.(\w+)\s*$", expr)  # "styles.submitBtn" -> "submitBtn"
     if not m:
         return None, False, None, []
@@ -174,6 +174,38 @@ def _resolve_css_module(repo_root: Path, owning_file_text: str, owning_file: str
     return style_file, False, None, []
 
 
+def find_best_matching_line(
+    lines: list[str], element_tokens: set[str], search_ranges: list[tuple[int, int]]
+) -> int | None:
+    """Returns the 0-indexed line with the most `element_tokens` overlap
+    within the given 1-indexed inclusive (lo, hi) ranges, tried in order —
+    the first range with any match wins, it doesn't fall through to a wider
+    one just because a later range might score higher. Only lines
+    containing '<' are considered (JSX element lines). None if nothing in
+    any range overlaps at all.
+
+    Scoring by max-overlap rather than first-match matters: a generic token
+    like "button" alone would otherwise match the first `<button>` in the
+    file regardless of which one the request actually means (e.g. "submit
+    button" vs. an unrelated logout button that happens to share the word
+    "button"). Shared by localize() and skills/executor.py.
+    """
+    for lo, hi in search_ranges:
+        best_score = 0
+        match_idx = None
+        for i in range(max(lo - 1, 0), min(hi, len(lines))):
+            if "<" not in lines[i]:
+                continue
+            line_tokens = set(tokenize(lines[i]))
+            score = len(element_tokens & line_tokens)
+            if score > best_score:
+                best_score = score
+                match_idx = i
+        if match_idx is not None:
+            return match_idx
+    return None
+
+
 def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResult:
     repo_root = Path(repo_root).resolve()
 
@@ -208,24 +240,7 @@ def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResul
 
     element_tokens = set(tokenize(intent.element)) if intent.element else set()
     start, end = top["lines"]
-    match_idx = None
-    # Pick the line with the MOST overlapping element tokens, not the first
-    # with any overlap — a generic token like "button" alone would otherwise
-    # match the first <button> in the file regardless of which one the
-    # request actually means (e.g. "submit button" vs. an unrelated logout
-    # button that happens to share the "button" token).
-    for lo, hi in ((start, end), (1, len(lines))):
-        best_score = 0
-        for i in range(max(lo - 1, 0), min(hi, len(lines))):
-            if "<" not in lines[i]:
-                continue
-            line_tokens = set(tokenize(lines[i]))
-            score = len(element_tokens & line_tokens)
-            if score > best_score:
-                best_score = score
-                match_idx = i
-        if match_idx is not None:
-            break
+    match_idx = find_best_matching_line(lines, element_tokens, [(start, end), (1, len(lines))])
 
     if match_idx is None:
         snippet = "\n".join(lines[start - 1 : end])
@@ -246,14 +261,14 @@ def localize(intent, repo_root: str | Path, top_k: int = 5) -> LocalizationResul
     snippet = "\n".join(lines[window_lo:window_hi])
     line_no = match_idx + 1
 
-    mechanism, style_ref = _classify_styling(snippet)
+    mechanism, style_ref = classify_styling(snippet)
 
     style_file = is_shared = shared_note = None
     other_usages: list[str] = []
     if mechanism == "css_class":
-        style_file, is_shared, shared_note, other_usages = _resolve_css_class(repo_root, top_file, style_ref)
+        style_file, is_shared, shared_note, other_usages = resolve_css_class(repo_root, top_file, style_ref)
     elif mechanism == "css_module":
-        style_file, is_shared, shared_note, other_usages = _resolve_css_module(repo_root, full_text, top_file, style_ref)
+        style_file, is_shared, shared_note, other_usages = resolve_css_module(repo_root, full_text, top_file, style_ref)
 
     mechanism_label = {
         "inline_style": "an inline `style` prop",
