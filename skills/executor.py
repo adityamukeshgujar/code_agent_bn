@@ -43,6 +43,15 @@ class IdentificationResult:
     def as_dict(self) -> dict:
         return dict(self.__dict__)
 
+    @property
+    def start_line(self) -> int | None:
+        """Alias so an IdentificationResult can be passed anywhere a
+        LocalizationResult is expected (patcher.generate_patch() reads
+        .start_line/.end_line/.file_path/.styling_mechanism/.style_ref/
+        .style_file — duck typing, not a shared base class, since the two
+        results otherwise serve different callers)."""
+        return self.line
+
 
 def identify(intent, skill: Skill, repo_root: str | Path) -> IdentificationResult:
     repo_root = Path(repo_root)
