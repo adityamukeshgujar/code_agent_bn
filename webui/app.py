@@ -1,9 +1,10 @@
-"""A small local web UI over the skills pipeline (skills/run.py's logic,
-but split into an "apply" phase and a separate, human-gated "push" phase
-instead of one CLI call).
+"""JSON API for the skills pipeline (skills/run.py's logic, but split into
+an "apply" phase and a separate, human-gated "push" phase instead of one
+CLI call). Pure API — the frontend is the React app in webui/frontend/
+(see its README for how to run it); this process only serves /api/*.
 
     python -m webui.app
-    -> open http://127.0.0.1:5000
+    -> API on http://127.0.0.1:5000 (CORS-open, for the Vite dev server)
 
 Flow: submit a CR -> watch progress (intent parsed -> skill matched ->
 identified -> patch generated -> applied -> validated) -> review the diff
@@ -26,7 +27,7 @@ import time
 import traceback
 import uuid
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 
 from indexer import config
 from intent.intent_parser import parse_intent
@@ -37,7 +38,17 @@ from skills.loader import load_skills
 from skills.matcher import match_skill
 from vcs.git_ops import open_pr
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__)
+
+
+@app.after_request
+def _allow_cors(response):
+    # Local dev only (127.0.0.1-bound API, Vite dev server on a different
+    # port) — permissive on purpose, not a public-facing deployment.
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 _JOBS: dict[str, dict] = {}
 _LOCK = threading.Lock()
@@ -200,11 +211,6 @@ def api_reject(job_id: str):
     job["status"] = "rejected"
     job["message"] = "Discarded — the local file was reverted, nothing was pushed."
     return jsonify({"ok": True})
-
-
-@app.get("/")
-def index():
-    return send_from_directory(app.static_folder, "index.html")
 
 
 def main() -> None:

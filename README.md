@@ -13,7 +13,7 @@ See [CLAUDE.md](CLAUDE.md) for the full spec. This is the phased build of it.
 | 5 | Git integration | Done — `git_ops.py`. Verified with a real live push + PR against `shreyashwinig/PAT_POC`. |
 | 6 | Orchestration entrypoint | Done — `agent/run.py`, with dry-run/`--apply`/`--push-pr`/`--allow-shared` safety gates. |
 | — | Skills library | Done — `skills/` — see "Skills" below. A curated alternative to Phase 2/3's free-text retrieval+localization for a fixed set of known UI change types. Identify-only by default; `--apply`/`--push-pr` reuse the same patcher/validator/git_ops as `agent/run.py` (color-change skills only — patcher.py doesn't generate patches for text/enable-disable yet). |
-| — | Web UI | Done — `webui/` — a local Flask app + plain HTML/JS page over the skills pipeline: submit a request, watch stage-by-stage progress, review the diff, confirm to push (or reject to revert). See "Web UI" below. |
+| — | Web UI | Done — `webui/` — a local Flask JSON API + a Vite/React frontend over the skills pipeline: submit a request, watch stage-by-stage progress, review the diff, confirm to push (or reject to revert). See "Web UI" below. |
 
 ## Setup
 
@@ -68,9 +68,8 @@ python -m agent.run --request "..." --root /path/to/some/repo --apply --push-pr 
 python -m skills.run --request "Change the submit button color to green" --root /path/to/some/repo
 python -m skills.run --request "..." --root /path/to/some/repo --allow-shared --apply --push-pr
 
-# web UI — same pipeline, a browser instead of the CLI
-python -m webui.app
-# then open http://127.0.0.1:5000
+# web UI — same pipeline, a browser instead of the CLI (see "Web UI" below
+# for the two-process setup: python -m webui.app + npm run dev)
 ```
 
 ## Chunker design notes
@@ -202,23 +201,38 @@ the target repo used to build these) — = 9 skills.
 
 ## Web UI
 
-`webui/` is a small local Flask app (`webui/app.py`) + a single static page
-(`webui/static/index.html`, plain HTML/CSS/JS, no build step) over the
+`webui/` is a local Flask JSON API (`webui/app.py`) + a Vite/React frontend
+(`webui/frontend/`, matching CLAUDE.md's Node.js + React stack) over the
 skills pipeline — a browser front end for the same `--apply`/`--push-pr`
 flow as `skills/run.py`'s CLI, with the push step split out as an explicit,
-human-gated confirmation instead of a single command.
+human-gated confirmation instead of a single command. The Python side stays
+Python on purpose — it's the real pipeline (Groq, Qdrant, tree-sitter,
+`npm`/`git` subprocesses), not something worth reimplementing in JS just to
+match the frontend's language.
+
+Two processes, both local-only:
 
 ```
+# terminal 1 — the API (binds 127.0.0.1:5000, CORS-open for the dev server)
 python -m webui.app
-# open http://127.0.0.1:5000
+
+# terminal 2 — the React app (first time: cd webui/frontend && npm install)
+cd webui/frontend
+npm run dev
+# open the URL Vite prints (http://localhost:5173, or the next free port)
 ```
+
+`vite.config.js` proxies `/api/*` to the Flask backend, so the browser only
+ever talks to one origin — no CORS wrangling needed in the app itself
+(Flask still sends permissive CORS headers regardless, for a built bundle
+served some other way).
 
 Flow: submit a request -> poll `/api/status/<job_id>` for stage-by-stage
 progress (intent parsed -> skill matched -> identified -> patch generated
 -> applied -> validated) -> review the diff -> **Confirm & Push** (opens a
 real PR, same `git_ops.open_pr` as the CLI) or **Reject** (reverts the
-local file, nothing pushed). Local-only (binds `127.0.0.1`), single-process,
-in-memory job store — a convenience UI for one person driving the pipeline
-by hand, not a hosted multi-user service. Same real backend as the CLI:
-real Groq/Qdrant calls, real `npm run lint`/`build` subprocesses, real
-git/GitHub push — nothing is simulated.
+local file, nothing pushed). In-memory job store on the Flask side — a
+convenience UI for one person driving the pipeline by hand, not a hosted
+multi-user service. Same real backend as the CLI: real Groq/Qdrant calls,
+real `npm run lint`/`build` subprocesses, real git/GitHub push — nothing is
+simulated.

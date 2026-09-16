@@ -1,0 +1,159 @@
+:root {
+  --bg: #f7f7f8;
+  --card: #ffffff;
+  --border: #e2e2e6;
+  --text: #1a1a1e;
+  --muted: #6b6b76;
+  --accent: #2563eb;
+  --ok: #16a34a;
+  --bad: #dc2626;
+  --warn: #d97706;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.3rem;
+  margin-bottom: 0.25rem;
+}
+
+.sub {
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  margin-bottom: 0.9rem;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 4.5em;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.55rem 1.1rem;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #9fb4d8;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #eef0f4;
+  color: var(--text);
+}
+
+.row {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.stage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stage-list li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.stage-list li:last-child {
+  border-bottom: none;
+}
+
+.stage-name {
+  font-weight: 600;
+  min-width: 140px;
+}
+
+.stage-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.9rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.banner {
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.banner.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.banner.bad {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.banner.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.banner a {
+  color: inherit;
+}
