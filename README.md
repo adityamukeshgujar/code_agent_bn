@@ -242,6 +242,14 @@ hand, not a hosted multi-user service. Same real backend as the CLI: real
 Groq/Qdrant calls, real `npm run lint`/`build` subprocesses, real
 git/GitHub push — nothing is simulated.
 
+The UI has no branch field — it always reads from and opens the PR against
+the repo's actual default branch (fetched live from the GitHub API), on a
+new auto-named branch (`agent/<slug>-<timestamp>`). `sync_from_github` and
+`vcs/git_ops.py` both separately accept an explicit `branch`/`base_branch`
+if that's ever needed again (e.g. from the CLI), but the web form
+intentionally doesn't expose it — the default branch is the right target
+in every case this UI is meant for.
+
 One real cost worth knowing: a **fresh** clone has no `node_modules`, so
 `npm run lint`/`build` would just fail with "command not found" — the
 pipeline runs `npm install` automatically the first time a given clone

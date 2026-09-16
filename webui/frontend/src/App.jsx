@@ -53,7 +53,6 @@ const TERMINAL_STATUSES = new Set([
 export default function App() {
   const [requestText, setRequestText] = useState("");
   const [repoUrl, setRepoUrl] = useState(DEFAULT_REPO_URL);
-  const [branch, setBranch] = useState("");
   const [jobId, setJobId] = useState(null);
   const [stages, setStages] = useState([]);
   const [status, setStatus] = useState(null);
@@ -100,7 +99,7 @@ export default function App() {
     const res = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request: requestText, repo_url: repoUrl, branch: branch || undefined }),
+      body: JSON.stringify({ request: requestText, repo_url: repoUrl }),
     });
     const data = await res.json();
     if (data.error) {
@@ -153,14 +152,6 @@ export default function App() {
           type="text"
           value={repoUrl}
           onChange={(e) => setRepoUrl(e.target.value)}
-        />
-        <label htmlFor="branch">Branch (optional — defaults to the repo's default branch)</label>
-        <input
-          id="branch"
-          type="text"
-          placeholder="main"
-          value={branch}
-          onChange={(e) => setBranch(e.target.value)}
         />
         <button type="submit" disabled={running}>
           Run
