@@ -19,17 +19,28 @@ GitHub push — nothing here is simulated.
 Only change_color skills can reach a pushable patch today (patcher.py's
 current coverage) — change_text/enable_disable requests still identify
 correctly but stop before a patch, same as the CLI.
+
+Accepts either a GitHub URL (clones/pulls into code_agent/repos/<name> via
+indexer/github_source.py — the same mechanism index_repo --repo-url uses)
+or a local path directly. The GitHub URL path also derives owner/repo for
+the eventual PR from the URL itself, rather than requiring GITHUB_REPO in
+.env to already point at the right repo.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import threading
 import time
 import traceback
 import uuid
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 
 from indexer import config
+from indexer.github_source import owner_repo_from_url, repo_name_from_url, sync_from_github
+from indexer.index_repo import DEFAULT_CLONE_ROOT
 from intent.intent_parser import parse_intent
 from patcher.patcher import apply_patch, generate_patch, revert_patch
 from patcher.validator import validate
@@ -69,9 +80,46 @@ def _log(job: dict, stage: str, **data) -> None:
         job["stages"].append({"stage": stage, "ts": time.time(), **data})
 
 
-def _run_pipeline(job_id: str, req_text: str, root: str) -> None:
+def _ensure_npm_dependencies(root: str, target_file: str, job: dict) -> None:
+    """A freshly-cloned repo has no node_modules — npm run lint/build would
+    just fail with "command not found" otherwise. No-op if they're already
+    there, which is normally true for an existing local checkout (--root),
+    so this only actually does anything the first time a given clone is
+    used. Walks up from the patched file to the nearest package.json, same
+    directory patcher.validator.validate() will run npm in."""
+    root_path = Path(root)
+    current = (root_path / target_file).parent
+    while True:
+        pkg_json = current / "package.json"
+        if pkg_json.exists():
+            if not (current / "node_modules").exists():
+                npm = shutil.which("npm")
+                if npm:
+                    _log(job, "installing_dependencies", dir=str(current.relative_to(root_path)))
+                    subprocess.run([npm, "install"], cwd=str(current), capture_output=True, text=True)
+            return
+        if current == root_path or current.parent == current:
+            return
+        current = current.parent
+
+
+def _run_pipeline(
+    job_id: str, req_text: str, root: str | None, repo_url: str | None, branch: str | None
+) -> None:
     job = _JOBS[job_id]
+    owner_repo = config.GITHUB_REPO  # fallback; overridden below if repo_url is a GitHub URL
     try:
+        if repo_url:
+            clone_dir = DEFAULT_CLONE_ROOT / repo_name_from_url(repo_url)
+            try:
+                root = str(sync_from_github(repo_url, clone_dir, branch=branch))
+            except RuntimeError as exc:
+                job["status"] = "failed"
+                job["message"] = f"Could not sync from GitHub: {exc}"
+                return
+            _log(job, "repo_synced", repo_url=repo_url, root=root)
+            owner_repo = owner_repo_from_url(repo_url) or owner_repo
+
         intent = parse_intent(req_text)
         _log(job, "intent_parsed", intent=intent.as_dict())
         if intent.needs_clarification:
@@ -114,6 +162,7 @@ def _run_pipeline(job_id: str, req_text: str, root: str) -> None:
         apply_patch(patch, root)
         _log(job, "patch_applied")
 
+        _ensure_npm_dependencies(root, patch.target_file, job)
         val = validate(root, patch.target_file)
         _log(job, "validated", ok=val.ok, side=val.side, steps=[s.__dict__ for s in val.steps])
         if not val.ok:
@@ -127,6 +176,7 @@ def _run_pipeline(job_id: str, req_text: str, root: str) -> None:
             job["result"] = result
             job["root"] = root
             job["request"] = req_text
+            job["owner_repo"] = owner_repo
         job["status"] = "awaiting_confirmation"
         job["message"] = "Applied and validated locally. Review the diff and confirm to push."
 
@@ -139,10 +189,10 @@ def _run_pipeline(job_id: str, req_text: str, root: str) -> None:
 def _push_pr(job_id: str) -> None:
     job = _JOBS[job_id]
     try:
-        owner_repo = config.GITHUB_REPO
+        owner_repo = job.get("owner_repo")
         if not owner_repo:
             job["status"] = "failed"
-            job["message"] = "No GITHUB_REPO configured in .env — can't open a PR."
+            job["message"] = "No GitHub repo known for this job (no repo_url given and GITHUB_REPO isn't set in .env) — can't open a PR."
             return
         pr = open_pr(job["root"], owner_repo, job["patch"], job["request"], job["result"].required_change)
         _log(job, "pr_result", ok=pr.ok, pr_url=pr.pr_url, branch=pr.branch, error=pr.error)
@@ -163,12 +213,14 @@ def _push_pr(job_id: str) -> None:
 def api_run():
     data = request.get_json(force=True) or {}
     req_text = (data.get("request") or "").strip()
-    root = (data.get("root") or "").strip()
-    if not req_text or not root:
-        return jsonify({"error": "both 'request' and 'root' are required"}), 400
+    root = (data.get("root") or "").strip() or None
+    repo_url = (data.get("repo_url") or "").strip() or None
+    branch = (data.get("branch") or "").strip() or None
+    if not req_text or not (root or repo_url):
+        return jsonify({"error": "'request' and one of 'repo_url'/'root' are required"}), 400
 
     job_id, job = _new_job()
-    threading.Thread(target=_run_pipeline, args=(job_id, req_text, root), daemon=True).start()
+    threading.Thread(target=_run_pipeline, args=(job_id, req_text, root, repo_url, branch), daemon=True).start()
     return jsonify({"job_id": job_id})
 
 

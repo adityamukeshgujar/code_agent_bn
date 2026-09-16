@@ -19,10 +19,14 @@ credential prompt will just fail rather than pausing for input.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 from . import config
+
+_HTTPS_URL_RE = re.compile(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
+_SSH_URL_RE = re.compile(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$")
 
 
 def _run_git(args: list[str], cwd: str | None = None) -> str:
@@ -46,6 +50,19 @@ def _authed_url(repo_url: str) -> str:
 def repo_name_from_url(repo_url: str) -> str:
     name = repo_url.rstrip("/").rsplit("/", 1)[-1]
     return name[: -len(".git")] if name.endswith(".git") else name
+
+
+def owner_repo_from_url(repo_url: str) -> str | None:
+    """'https://github.com/owner/repo(.git)?' or 'git@github.com:owner/repo.git'
+    -> 'owner/repo', for use with the GitHub REST API (vcs/git_ops.py takes
+    exactly this form). None if it doesn't look like a GitHub URL at all —
+    the caller should fall back to something explicit (e.g. GITHUB_REPO)
+    rather than guess."""
+    for pattern in (_HTTPS_URL_RE, _SSH_URL_RE):
+        m = pattern.match(repo_url.strip())
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+    return None
 
 
 def sync_from_github(repo_url: str, clone_dir: str | Path, branch: str | None = None) -> Path:

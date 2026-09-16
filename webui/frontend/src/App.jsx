@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 const STAGE_LABELS = {
+  repo_synced: "Synced from GitHub",
+  installing_dependencies: "Installing dependencies (npm install)",
   intent_parsed: "Parsed request",
   skill_matched: "Matched skill",
   identified: "Located target code",
@@ -15,6 +17,8 @@ const STAGE_LABELS = {
 
 function summarizeStage(s) {
   switch (s.stage) {
+    case "repo_synced":
+      return s.root;
     case "intent_parsed": {
       const i = s.intent;
       return `${i.action || "?"} on "${i.element || "?"}" (${i.page || "?"})`;
@@ -36,7 +40,7 @@ function summarizeStage(s) {
   }
 }
 
-const DEFAULT_ROOT = "C:\\Users\\adityamukesh.g\\Documents\\Praesidium\\PAT 1\\PAT_POC";
+const DEFAULT_REPO_URL = "https://github.com/shreyashwinig/PAT_POC";
 const TERMINAL_STATUSES = new Set([
   "awaiting_confirmation",
   "done",
@@ -48,7 +52,8 @@ const TERMINAL_STATUSES = new Set([
 
 export default function App() {
   const [requestText, setRequestText] = useState("");
-  const [root, setRoot] = useState(DEFAULT_ROOT);
+  const [repoUrl, setRepoUrl] = useState(DEFAULT_REPO_URL);
+  const [branch, setBranch] = useState("");
   const [jobId, setJobId] = useState(null);
   const [stages, setStages] = useState([]);
   const [status, setStatus] = useState(null);
@@ -83,7 +88,7 @@ export default function App() {
 
   const handleRun = async (e) => {
     e.preventDefault();
-    if (!requestText.trim() || !root.trim()) return;
+    if (!requestText.trim() || !repoUrl.trim()) return;
 
     setRunning(true);
     setStages([]);
@@ -95,7 +100,7 @@ export default function App() {
     const res = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request: requestText, root }),
+      body: JSON.stringify({ request: requestText, repo_url: repoUrl, branch: branch || undefined }),
     });
     const data = await res.json();
     if (data.error) {
@@ -130,7 +135,8 @@ export default function App() {
     <div className="wrap">
       <h1>codebase-change-agent</h1>
       <p className="sub">
-        Submit a UI change request. Only button-color requests can go all the way to a push today.
+        Give a GitHub repo URL — it's cloned/pulled automatically, no local checkout needed.
+        Only button-color requests can go all the way to a push today.
       </p>
 
       <form className="card" onSubmit={handleRun}>
@@ -141,12 +147,20 @@ export default function App() {
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
         />
-        <label htmlFor="root">Repo path (local checkout)</label>
+        <label htmlFor="repo-url">GitHub repo URL</label>
         <input
-          id="root"
+          id="repo-url"
           type="text"
-          value={root}
-          onChange={(e) => setRoot(e.target.value)}
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+        />
+        <label htmlFor="branch">Branch (optional — defaults to the repo's default branch)</label>
+        <input
+          id="branch"
+          type="text"
+          placeholder="main"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
         />
         <button type="submit" disabled={running}>
           Run

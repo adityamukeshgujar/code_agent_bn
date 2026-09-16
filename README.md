@@ -227,12 +227,24 @@ ever talks to one origin — no CORS wrangling needed in the app itself
 (Flask still sends permissive CORS headers regardless, for a built bundle
 served some other way).
 
-Flow: submit a request -> poll `/api/status/<job_id>` for stage-by-stage
-progress (intent parsed -> skill matched -> identified -> patch generated
--> applied -> validated) -> review the diff -> **Confirm & Push** (opens a
-real PR, same `git_ops.open_pr` as the CLI) or **Reject** (reverts the
-local file, nothing pushed). In-memory job store on the Flask side — a
-convenience UI for one person driving the pipeline by hand, not a hosted
-multi-user service. Same real backend as the CLI: real Groq/Qdrant calls,
-real `npm run lint`/`build` subprocesses, real git/GitHub push — nothing is
-simulated.
+Flow: give a **GitHub repo URL** (no local checkout needed — it's cloned,
+or fetched + reset if already cloned, into `code_agent/repos/<name>` the
+same way `index_repo --repo-url` does) -> poll `/api/status/<job_id>` for
+stage-by-stage progress (synced from GitHub -> intent parsed -> skill
+matched -> identified -> patch generated -> applied -> installing
+dependencies, first time only -> validated) -> review the diff -> **Confirm
+& Push** (opens a real PR — `owner/repo` is parsed straight from the URL,
+not read from `.env`) or **Reject** (reverts the local file, nothing
+pushed). A local path still works too (pass `root` instead of `repo_url` to
+`/api/run`), just not exposed in the current form. In-memory job store on
+the Flask side — a convenience UI for one person driving the pipeline by
+hand, not a hosted multi-user service. Same real backend as the CLI: real
+Groq/Qdrant calls, real `npm run lint`/`build` subprocesses, real
+git/GitHub push — nothing is simulated.
+
+One real cost worth knowing: a **fresh** clone has no `node_modules`, so
+`npm run lint`/`build` would just fail with "command not found" — the
+pipeline runs `npm install` automatically the first time a given clone
+needs it (a couple of minutes for a repo with native deps, like this one's
+`canvas` dependency), then reuses it on every later run against that same
+clone.
