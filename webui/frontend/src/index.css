@@ -157,3 +157,81 @@ pre {
 .banner a {
   color: inherit;
 }
+
+.banner.small {
+  font-size: 12.5px;
+  padding: 0.5rem 0.75rem;
+  margin-top: -0.4rem;
+}
+
+.banner.busy {
+  background: #e0e7ff;
+  color: #3730a3;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: -0.6rem;
+  margin-bottom: 0.9rem;
+}
+
+input.locked {
+  background: #f1f2f4;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: -0.4rem 0 0.9rem;
+}
+
+.examples-label {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-right: 0.2rem;
+}
+
+.chip {
+  background: #eef0f4;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: #e2e5eb;
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -0.15em;
+}
+
+.banner .spinner {
+  border: 2px solid rgba(55, 48, 163, 0.25);
+  border-top-color: currentColor;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

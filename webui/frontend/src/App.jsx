@@ -41,6 +41,28 @@ function summarizeStage(s) {
 }
 
 const DEFAULT_REPO_URL = "https://github.com/shreyashwinig/PAT_POC";
+
+// Clicking one just fills the textbox — it doesn't run anything on its own.
+// A mix of patchable (color) and identify-only (text/enable-disable)
+// requests on purpose, so people can see both kinds of result.
+const EXAMPLES = [
+  { label: "🟢 Submit button → green", text: "Change the color of the submit button in Assessment Page to green" },
+  { label: "🟣 Sign In button → purple", text: "Change the Sign In button color on the login page to purple" },
+  { label: "🔴 PDF viewer close button → red", text: "In the PDF viewer, change the close button color to red" },
+  {
+    label: "✏️ Relabel “Generate Action Plan”",
+    text: "On the Assessment page, change the 'Generate Action Plan' button text to 'Finish Review'",
+  },
+  {
+    label: "🔒 Disable Sign In until filled",
+    text: "On the login page, disable the Sign In button until all fields are filled in",
+  },
+  {
+    label: "🔍 Disable zoom-in at max",
+    text: "In the PDF viewer, disable the zoom in button when it hits the max zoom level",
+  },
+];
+
 const TERMINAL_STATUSES = new Set([
   "awaiting_confirmation",
   "done",
@@ -50,9 +72,14 @@ const TERMINAL_STATUSES = new Set([
   "failed",
 ]);
 
+function Spinner() {
+  return <span className="spinner" aria-label="Loading" />;
+}
+
 export default function App() {
   const [requestText, setRequestText] = useState("");
-  const [repoUrl, setRepoUrl] = useState(DEFAULT_REPO_URL);
+  const [repoUrl] = useState(DEFAULT_REPO_URL);
+  const [showRepoLockNotice, setShowRepoLockNotice] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [stages, setStages] = useState([]);
   const [status, setStatus] = useState(null);
@@ -62,6 +89,7 @@ export default function App() {
   const [confirming, setConfirming] = useState(false);
 
   const pollRef = useRef(null);
+  const noticeTimerRef = useRef(null);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -83,7 +111,12 @@ export default function App() {
     }
   };
 
-  useEffect(() => stopPolling, []); // clean up on unmount
+  useEffect(() => {
+    return () => {
+      stopPolling();
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []); // clean up on unmount
 
   const handleRun = async (e) => {
     e.preventDefault();
@@ -126,16 +159,24 @@ export default function App() {
     setConfirming(false);
   };
 
+  const handleRepoUrlAttempt = () => {
+    setShowRepoLockNotice(true);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setShowRepoLockNotice(false), 4000);
+  };
+
   const patchStage = stages.find((s) => s.stage === "patch_generated");
   const identifyStage = stages.find((s) => s.stage === "identified");
   const isShared = identifyStage?.identification?.is_shared;
+  const isBusy = status === "running" || status === "pushing";
 
   return (
     <div className="wrap">
       <h1>codebase-change-agent</h1>
       <p className="sub">
-        Give a GitHub repo URL — it's cloned/pulled automatically, no local checkout needed.
-        Only button-color requests can go all the way to a push today.
+        Makes small UI changes to <strong>AI Policy Review</strong> — an internal app for reviewing
+        accreditation/compliance documents and assessments — from a plain-English request. Give a GitHub repo
+        URL, no local checkout needed. Only button-color requests can go all the way to a push today.
       </p>
 
       <form className="card" onSubmit={handleRun}>
@@ -146,20 +187,57 @@ export default function App() {
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
         />
+
+        <div className="examples">
+          <span className="examples-label">Try an example:</span>
+          {EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              type="button"
+              className="chip"
+              onClick={() => setRequestText(ex.text)}
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
+
         <label htmlFor="repo-url">GitHub repo URL</label>
         <input
           id="repo-url"
           type="text"
           value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
+          readOnly
+          onFocus={handleRepoUrlAttempt}
+          onMouseDown={handleRepoUrlAttempt}
+          className="locked"
         />
+        {showRepoLockNotice ? (
+          <div className="banner warn small">
+            🔒 This is an early version — it only supports this one repo for now.
+          </div>
+        ) : (
+          <div className="hint">🔒 Locked while in early testing.</div>
+        )}
+
         <button type="submit" disabled={running}>
-          Run
+          {running ? (
+            <>
+              <Spinner /> Running…
+            </>
+          ) : (
+            "Run"
+          )}
         </button>
       </form>
 
       {status && (
         <div className="card">
+          {isBusy && (
+            <div className="banner busy">
+              <Spinner /> {status === "pushing" ? "Pushing to GitHub…" : "Working…"}
+            </div>
+          )}
           {status === "awaiting_confirmation" && isShared && (
             <div className="banner warn">⚠️ {identifyStage.identification.shared_note}</div>
           )}
@@ -196,7 +274,13 @@ export default function App() {
           <pre>{patchStage.diff}</pre>
           <div className="row">
             <button onClick={handleConfirm} disabled={confirming}>
-              Confirm &amp; Push
+              {confirming || status === "pushing" ? (
+                <>
+                  <Spinner /> Pushing…
+                </>
+              ) : (
+                <>Confirm &amp; Push</>
+              )}
             </button>
             <button className="secondary" onClick={handleReject} disabled={confirming}>
               Reject
