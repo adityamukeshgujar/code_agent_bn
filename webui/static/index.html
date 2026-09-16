@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>codebase-change-agent</title>
+<style>
+  :root {
+    --bg: #f7f7f8; --card: #ffffff; --border: #e2e2e6; --text: #1a1a1e;
+    --muted: #6b6b76; --accent: #2563eb; --ok: #16a34a; --bad: #dc2626; --warn: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem; background: var(--bg); color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; font-size: 14px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
+  .sub { color: var(--muted); margin-bottom: 1.5rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.25rem; margin-bottom: 1rem;
+  }
+  label { display: block; font-weight: 600; margin-bottom: 0.35rem; }
+  textarea, input[type=text] {
+    width: 100%; padding: 0.6rem; border: 1px solid var(--border); border-radius: 6px;
+    font-family: inherit; font-size: 14px; margin-bottom: 0.9rem;
+  }
+  textarea { resize: vertical; min-height: 4.5em; }
+  button {
+    background: var(--accent); color: white; border: none; border-radius: 6px;
+    padding: 0.55rem 1.1rem; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { background: #9fb4d8; cursor: not-allowed; }
+  button.secondary { background: #eef0f4; color: var(--text); }
+  button.danger { background: var(--bad); }
+  .row { display: flex; gap: 0.6rem; }
+  .stage-list { list-style: none; margin: 0; padding: 0; }
+  .stage-list li {
+    padding: 0.4rem 0; border-bottom: 1px solid var(--border); display: flex; gap: 0.5rem; align-items: baseline;
+  }
+  .stage-list li:last-child { border-bottom: none; }
+  .stage-name { font-weight: 600; min-width: 140px; }
+  .stage-detail { color: var(--muted); font-size: 13px; }
+  pre {
+    background: #0f172a; color: #e2e8f0; padding: 0.9rem; border-radius: 8px;
+    overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+  }
+  .banner { padding: 0.8rem 1rem; border-radius: 8px; font-weight: 600; margin-bottom: 1rem; }
+  .banner.ok { background: #dcfce7; color: #166534; }
+  .banner.bad { background: #fee2e2; color: #991b1b; }
+  .banner.warn { background: #fef3c7; color: #92400e; }
+  .banner a { color: inherit; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>codebase-change-agent</h1>
+  <div class="sub">Submit a UI change request. Only button-color requests can go all the way to a push today.</div>
+
+  <div class="card" id="form-card">
+    <label for="request">Change request</label>
+    <textarea id="request" placeholder="e.g. Change the color of the submit button in Assessment Page to green"></textarea>
+    <label for="root">Repo path (local checkout)</label>
+    <input type="text" id="root" value="C:\Users\adityamukesh.g\Documents\Praesidium\PAT 1\PAT_POC">
+    <button id="run-btn">Run</button>
+  </div>
+
+  <div class="card" id="progress-card" hidden>
+    <div id="banner" class="banner" hidden></div>
+    <ul class="stage-list" id="stages"></ul>
+  </div>
+
+  <div class="card" id="diff-card" hidden>
+    <div style="margin-bottom:0.6rem;"><strong>Proposed change:</strong> <span id="diff-desc"></span></div>
+    <pre id="diff-text"></pre>
+    <div class="row">
+      <button id="confirm-btn">Confirm &amp; Push</button>
+      <button id="reject-btn" class="secondary">Reject</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STAGE_LABELS = {
+  intent_parsed: "Parsed request",
+  skill_matched: "Matched skill",
+  identified: "Located target code",
+  skill_match_failed: "No skill matched",
+  patch_generated: "Generated patch",
+  patch_applied: "Applied patch",
+  validated: "Validated (lint/build)",
+  pr_result: "Opened PR",
+  reverted: "Reverted",
+  error: "Error",
+};
+
+let pollTimer = null;
+let currentJobId = null;
+
+const runBtn = document.getElementById("run-btn");
+const confirmBtn = document.getElementById("confirm-btn");
+const rejectBtn = document.getElementById("reject-btn");
+const progressCard = document.getElementById("progress-card");
+const diffCard = document.getElementById("diff-card");
+const stagesEl = document.getElementById("stages");
+const bannerEl = document.getElementById("banner");
+
+function setBanner(kind, html) {
+  bannerEl.className = "banner " + kind;
+  bannerEl.innerHTML = html;
+  bannerEl.hidden = false;
+}
+
+function renderStages(stages) {
+  stagesEl.innerHTML = "";
+  for (const s of stages) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "stage-name";
+    name.textContent = STAGE_LABELS[s.stage] || s.stage;
+    li.appendChild(name);
+    const detail = document.createElement("span");
+    detail.className = "stage-detail";
+    detail.textContent = summarizeStage(s);
+    li.appendChild(detail);
+    stagesEl.appendChild(li);
+  }
+}
+
+function summarizeStage(s) {
+  if (s.stage === "intent_parsed") {
+    const i = s.intent;
+    return `${i.action || "?"} on "${i.element || "?"}" (${i.page || "?"})`;
+  }
+  if (s.stage === "skill_matched") return `${s.skill} (${s.change_type})`;
+  if (s.stage === "identified") {
+    const r = s.identification;
+    return r.ok ? `${r.file_path}:${r.line}` : (r.note || "not found");
+  }
+  if (s.stage === "patch_generated") return `${s.target_file} — ${s.description}`;
+  if (s.stage === "validated") return s.ok ? `${s.side} OK` : `${s.side} FAILED`;
+  if (s.stage === "pr_result") return s.ok ? s.pr_url : s.error;
+  return "";
+}
+
+async function poll() {
+  const res = await fetch(`/api/status/${currentJobId}`);
+  const data = await res.json();
+  renderStages(data.stages);
+
+  if (data.status === "running" || data.status === "pushing") {
+    return; // keep polling
+  }
+
+  clearInterval(pollTimer);
+  pollTimer = null;
+
+  if (data.status === "awaiting_confirmation") {
+    const patchStage = data.stages.find(s => s.stage === "patch_generated");
+    document.getElementById("diff-desc").textContent = patchStage ? patchStage.description : "";
+    document.getElementById("diff-text").textContent = patchStage ? patchStage.diff : "";
+    const identifyStage = data.stages.find(s => s.stage === "identified");
+    if (identifyStage && identifyStage.identification && identifyStage.identification.is_shared) {
+      setBanner("warn", "⚠️ " + (identifyStage.identification.shared_note || "This style is shared/global — review before pushing."));
+    }
+    diffCard.hidden = false;
+    runBtn.disabled = false;
+  } else if (data.status === "done") {
+    setBanner("ok", `✅ Change made — <a href="${data.pr_url}" target="_blank">check the PR</a>.`);
+    runBtn.disabled = false;
+  } else if (data.status === "needs_clarification") {
+    setBanner("warn", "Needs clarification: " + data.message);
+    runBtn.disabled = false;
+  } else if (data.status === "identified_only") {
+    setBanner("warn", data.message);
+    runBtn.disabled = false;
+  } else if (data.status === "rejected") {
+    setBanner("warn", data.message);
+    runBtn.disabled = false;
+  } else {
+    setBanner("bad", "❌ " + data.message);
+    runBtn.disabled = false;
+  }
+}
+
+runBtn.addEventListener("click", async () => {
+  const reqText = document.getElementById("request").value.trim();
+  const root = document.getElementById("root").value.trim();
+  if (!reqText || !root) { alert("Both fields are required."); return; }
+
+  runBtn.disabled = true;
+  progressCard.hidden = false;
+  diffCard.hidden = true;
+  bannerEl.hidden = true;
+  stagesEl.innerHTML = "";
+
+  const res = await fetch("/api/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request: reqText, root }),
+  });
+  const data = await res.json();
+  if (data.error) { setBanner("bad", data.error); runBtn.disabled = false; return; }
+  currentJobId = data.job_id;
+  pollTimer = setInterval(poll, 1000);
+});
+
+confirmBtn.addEventListener("click", async () => {
+  confirmBtn.disabled = true;
+  rejectBtn.disabled = true;
+  await fetch(`/api/confirm/${currentJobId}`, { method: "POST" });
+  pollTimer = setInterval(poll, 1000);
+});
+
+rejectBtn.addEventListener("click", async () => {
+  confirmBtn.disabled = true;
+  rejectBtn.disabled = true;
+  await fetch(`/api/reject/${currentJobId}`, { method: "POST" });
+  diffCard.hidden = true;
+  const res = await fetch(`/api/status/${currentJobId}`);
+  const data = await res.json();
+  setBanner("warn", data.message);
+  runBtn.disabled = false;
+});
+</script>
+</body>
+</html>

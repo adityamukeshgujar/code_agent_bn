@@ -10,9 +10,10 @@ See [CLAUDE.md](CLAUDE.md) for the full spec. This is the phased build of it.
 | 2 | Retrieval layer | `retrieve.py` done (vector search + keyword re-rank). `repo_map.py` not built yet. |
 | 3 | Intent parsing & localization | Done — `intent_parser.py` (Groq) + `localizer.py`. |
 | 4 | Patch application & validation | Done — `patcher.py` (css_class/css_module/inline_style/tailwind_class) + `validator.py`. |
-| 5 | Git integration | Done — `git_ops.py`. Live push/PR not yet run end-to-end (dry-run/local-apply verified only). |
+| 5 | Git integration | Done — `git_ops.py`. Verified with a real live push + PR against `shreyashwinig/PAT_POC`. |
 | 6 | Orchestration entrypoint | Done — `agent/run.py`, with dry-run/`--apply`/`--push-pr`/`--allow-shared` safety gates. |
-| — | Skills library (identify-only) | Done — `skills/` — see "Skills" below. A curated alternative to Phase 2/3's free-text retrieval+localization for a fixed set of known UI change types; outputs only what needs to change, never patches. |
+| — | Skills library | Done — `skills/` — see "Skills" below. A curated alternative to Phase 2/3's free-text retrieval+localization for a fixed set of known UI change types. Identify-only by default; `--apply`/`--push-pr` reuse the same patcher/validator/git_ops as `agent/run.py` (color-change skills only — patcher.py doesn't generate patches for text/enable-disable yet). |
+| — | Web UI | Done — `webui/` — a local Flask app + plain HTML/JS page over the skills pipeline: submit a request, watch stage-by-stage progress, review the diff, confirm to push (or reject to revert). See "Web UI" below. |
 
 ## Setup
 
@@ -62,8 +63,14 @@ python -m agent.run --request "Change the color of the submit button in Assessme
 # --allow-shared is required if the target style is flagged as shared/global
 python -m agent.run --request "..." --root /path/to/some/repo --apply --push-pr --allow-shared
 
-# skills pipeline — identify only, never writes/patches/touches git
+# skills pipeline — identify only by default (same --apply/--push-pr/
+# --allow-shared gates as agent.run, color-change skills only for now)
 python -m skills.run --request "Change the submit button color to green" --root /path/to/some/repo
+python -m skills.run --request "..." --root /path/to/some/repo --allow-shared --apply --push-pr
+
+# web UI — same pipeline, a browser instead of the CLI
+python -m webui.app
+# then open http://127.0.0.1:5000
 ```
 
 ## Chunker design notes
@@ -168,20 +175,50 @@ authored.
 - `skills/matcher.py` — Groq call that picks the single best-fitting
   skill for a request (or none, rather than forcing a bad match).
 - `skills/executor.py` — reads the matched skill's target file and
-  pinpoints the exact line via the same max-token-overlap scoring as
-  `intent/localizer.py` (`find_best_matching_line`, `classify_styling`,
-  `resolve_css_class`/`resolve_css_module` are shared between the two,
-  not duplicated). Unlike the localizer, it searches its one target file
-  in a single pass rather than per-element windows — an early bug here
-  showed why: trying each declared element's line window as a separate
-  fallback range stops at the first one with *any* overlap, so a weakly
-  related earlier element beat a strongly related later one purely by
-  list order.
+  pinpoints the exact element via `intent/localizer.py`'s
+  `find_best_matching_element` (tree-sitter, scores a JSX element's full
+  span regardless of how many lines its attributes/text spread across —
+  see "Localization design notes" above for why line-scanning alone isn't
+  enough), falling back to `find_best_matching_line` only for non-JSX
+  files. `classify_styling`/`resolve_css_class`/`resolve_css_module` are
+  likewise shared with the localizer, not duplicated. It searches its one
+  target file in a single pass rather than per-element windows — an early
+  bug here showed why: trying each declared element's window as a
+  separate fallback range stops at the first one with *any* overlap, so a
+  weakly related earlier element beat a strongly related later one purely
+  by list order.
 - `skills/run.py` — `python -m skills.run --request "..." --root <path>`.
-  **Reduced scope, intentionally**: identifies the code and describes the
-  needed change only. No patch, no write, no git — that comes later once
-  this identify-only step has been exercised against real requests.
+  Identify-only by default (describes the code + needed change, no
+  writes). `--apply` (patch + validate, revert on failure) and `--push-pr`
+  (also branch/commit/push/open a PR) reuse `patcher.py`/`vcs/git_ops.py`
+  exactly as `agent/run.py` does — only for `change_color` skills today,
+  since that's the only change type `patcher.py` can generate a patch for;
+  `change_text`/`enable_disable` still identify correctly but stop with an
+  explicit "not implemented" reason if `--apply` is requested.
 
 Currently covers 3 files × 3 change types — `AssessmentPage.jsx`,
 `LoginPage.jsx`, `PdfHighlightViewer.jsx` (`frontend/src/components/` in
 the target repo used to build these) — = 9 skills.
+
+## Web UI
+
+`webui/` is a small local Flask app (`webui/app.py`) + a single static page
+(`webui/static/index.html`, plain HTML/CSS/JS, no build step) over the
+skills pipeline — a browser front end for the same `--apply`/`--push-pr`
+flow as `skills/run.py`'s CLI, with the push step split out as an explicit,
+human-gated confirmation instead of a single command.
+
+```
+python -m webui.app
+# open http://127.0.0.1:5000
+```
+
+Flow: submit a request -> poll `/api/status/<job_id>` for stage-by-stage
+progress (intent parsed -> skill matched -> identified -> patch generated
+-> applied -> validated) -> review the diff -> **Confirm & Push** (opens a
+real PR, same `git_ops.open_pr` as the CLI) or **Reject** (reverts the
+local file, nothing pushed). Local-only (binds `127.0.0.1`), single-process,
+in-memory job store — a convenience UI for one person driving the pipeline
+by hand, not a hosted multi-user service. Same real backend as the CLI:
+real Groq/Qdrant calls, real `npm run lint`/`build` subprocesses, real
+git/GitHub push — nothing is simulated.
